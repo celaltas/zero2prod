@@ -3,7 +3,7 @@ name: Zero2Prod CI
 on:
   push:
     branches:
-      - main
+      - master
 
 jobs:
   check:
