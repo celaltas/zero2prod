@@ -5,6 +5,7 @@ use uuid::Uuid;
 use zero2prod::{
     configuration::{get_configuration, DatabaseSettings},
     startup,
+    telemetry::{get_subscriber, init_subscriber},
 };
 
 pub struct TestApp {
@@ -61,6 +62,8 @@ async fn test_health_check() {
 
 #[actix_rt::test]
 async fn subscribe_returns_a_200_for_valid_form_data() {
+    let subscriber = get_subscriber("test", "debug", std::io::stdout);
+    init_subscriber(subscriber);
     let app = spawn_app().await;
     let client = Client::new();
     let body = "name=le%20guin&email=ursula_le_guin%40gmail.com";
