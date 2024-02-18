@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:latest
+    container_name: postgres-container
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: newsletter
+    ports:
+      - "5432:5432"
+    networks:
+      - my-network
+
+  rust-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rust-app-container
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://postgres:password@postgres-container:5432/newsletter
+    depends_on:
+      - postgres
+    ports:
+      - "8000:8000"
+    networks:
+      - my-network
+
+networks:
+  my-network:

@@ -87,5 +87,3 @@ pub fn get_configuration() -> Result<Settings, config::ConfigError> {
         Err(e) => Err(e),
     }
 }
-
-
