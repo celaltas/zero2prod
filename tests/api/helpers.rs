@@ -1,3 +1,4 @@
+use reqwest::Client;
 use sqlx::{Connection, Executor, PgConnection, PgPool};
 use uuid::Uuid;
 use zero2prod::{
@@ -8,6 +9,18 @@ use zero2prod::{
 pub struct TestApp {
     pub address: String,
     pub db_pool: PgPool,
+}
+
+impl TestApp {
+    pub async fn post_subscriptions(&self, body: String) -> reqwest::Response {
+        Client::new()
+            .post(&format!("{}/subscriptions", &self.address))
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(body)
+            .send()
+            .await
+            .expect("Failed to execute request post request to subscriptions endpoint.")
+    }
 }
 
 pub async fn spawn_app() -> TestApp {
@@ -23,6 +36,7 @@ pub async fn spawn_app() -> TestApp {
         .expect("Failed to build application.");
     configure_database(&configuration.database).await;
     let address = format!("http://127.0.0.1:{}", application.port());
+    println!("application port = {}", &address);
     let _ = tokio::spawn(application.run_until_stopped());
 
     TestApp {

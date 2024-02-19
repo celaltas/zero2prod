@@ -1,5 +1,5 @@
 use crate::{
-    configuration::{get_configuration, DatabaseSettings, Settings},
+    configuration::{DatabaseSettings, Settings},
     email_client::EmailClient,
     routes::{health_check, subscribe},
 };
@@ -29,7 +29,6 @@ impl Application {
             timeout,
         );
 
-        let configuration = get_configuration().expect("Failed to read configuration");
         let address = format!(
             "{}:{}",
             configuration.application.host, configuration.application.port

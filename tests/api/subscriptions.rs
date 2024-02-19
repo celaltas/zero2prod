@@ -1,25 +1,11 @@
 use crate::helpers::spawn_app;
-use reqwest::Client;
-use zero2prod::telemetry::{get_subscriber, init_subscriber};
 
 #[actix_rt::test]
 async fn subscribe_returns_a_200_for_valid_form_data() {
-    let subscriber = get_subscriber("test", "debug", std::io::stdout);
-    init_subscriber(subscriber);
     let app = spawn_app().await;
-    let client = Client::new();
     let body = "name=le%20guin&email=ursula_le_guin%40gmail.com";
-
-    let response = client
-        .post(&format!("{}/subscriptions", &app.address))
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .body(body)
-        .send()
-        .await
-        .expect("Failed to execute request post request to subscriptions endpoint.");
-
+    let response = app.post_subscriptions(body.into()).await;
     assert_eq!(200, response.status().as_u16());
-
     let record = sqlx::query!("SELECT email, name FROM subscriptions")
         .fetch_one(&app.db_pool)
         .await
@@ -32,7 +18,6 @@ async fn subscribe_returns_a_200_for_valid_form_data() {
 #[actix_rt::test]
 async fn subscribe_returns_a_400_when_data_is_missing() {
     let app = spawn_app().await;
-    let client = Client::new();
     let test_cases = vec![
         ("name=le%20guin", "missing the email"),
         ("email=ursula_le_guin%40gmail.com", "missing the name"),
@@ -40,13 +25,7 @@ async fn subscribe_returns_a_400_when_data_is_missing() {
     ];
 
     for (invalid_body, error_message) in test_cases {
-        let response = client
-            .post(&format!("{}/subscriptions", &app.address))
-            .header("Content-Type", "application/x-www-form-urlencoded")
-            .body(invalid_body)
-            .send()
-            .await
-            .expect("Failed to execute request post request to subscriptions endpoint.");
+        let response = app.post_subscriptions(invalid_body.into()).await;
 
         assert_eq!(
             400,
@@ -60,7 +39,6 @@ async fn subscribe_returns_a_400_when_data_is_missing() {
 #[actix_rt::test]
 async fn subscribe_returns_a_200_when_fields_are_present_but_empty() {
     let app = spawn_app().await;
-    let client = Client::new();
     let test_cases = [
         ("name=&email=ursula_le_guin%40gmail.com", "empty name"),
         ("name=Ursula&email=", "empty email"),
@@ -68,13 +46,7 @@ async fn subscribe_returns_a_200_when_fields_are_present_but_empty() {
     ];
 
     for (body, description) in test_cases {
-        let response = client
-            .post(&format!("{}/subscriptions", &app.address))
-            .header("Content-Type", "application/x-www-form-urlencoded")
-            .body(body)
-            .send()
-            .await
-            .expect("Failed to execute request post request to subscriptions endpoint.");
+        let response = app.post_subscriptions(body.into()).await;
 
         assert_eq!(
             400,
