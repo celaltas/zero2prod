@@ -1,5 +1,4 @@
 use crate::helpers::spawn_app;
-use linkify::{LinkFinder, LinkKind};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
@@ -33,7 +32,7 @@ async fn subscribe_sends_a_confirmation_email_for_valid_data() {
         .mount(&app.email_server)
         .await;
 
-    let response = app.post_subscriptions(body.into()).await;
+    let _response = app.post_subscriptions(body.into()).await;
 }
 
 #[actix_rt::test]
