@@ -1,8 +1,13 @@
 use crate::{domain::SubscriberEmail, email_client::EmailClient};
-use actix_web::{web, HttpResponse, ResponseError};
-use reqwest::StatusCode;
+use actix_web::{http::header::HeaderMap, web, HttpRequest, HttpResponse, ResponseError};
+use argon2::{Argon2, PasswordHash, PasswordVerifier};
+use reqwest::{
+    header::{self, HeaderValue},
+    StatusCode,
+};
 use sqlx::PgPool;
 use std::{error::Error, fmt::Formatter};
+use uuid::Uuid;
 
 #[derive(serde::Deserialize, Debug)]
 pub struct BodyData {
@@ -20,12 +25,22 @@ struct ConfirmedSubscriber {
     email: SubscriberEmail,
 }
 
+#[tracing::instrument(
+    name = "Publish a newsletter issue",
+    skip(body, pool, email_client, request),
+    fields(username=tracing::field::Empty, user_id=tracing::field::Empty)
+    )]
 pub async fn publish_newsletter(
     body: web::Json<BodyData>,
     pool: web::Data<PgPool>,
     email_client: web::Data<EmailClient>,
+    request: HttpRequest,
 ) -> Result<HttpResponse, PublishError> {
     let subscribers = get_confirmed_subscribers(&pool).await?;
+    let credentials = basic_authentication(request.headers())?;
+    tracing::Span::current().record("username", &tracing::field::display(&credentials.username));
+    let user_id = validate_credentials(credentials, &pool).await?;
+    tracing::Span::current().record("user_id", &tracing::field::display(&user_id));
     for subscriber in subscribers {
         match subscriber {
             Ok(subscriber) => {
@@ -49,6 +64,75 @@ pub async fn publish_newsletter(
     }
 
     Ok(HttpResponse::Ok().finish())
+}
+
+#[derive(Debug)]
+struct Credentials {
+    username: String,
+    password: String,
+}
+
+async fn validate_credentials(
+    credentials: Credentials,
+    pool: &PgPool,
+) -> Result<Uuid, PublishError> {
+    let row = sqlx::query!(
+        r#"
+        SELECT user_id, password_hash
+        FROM users
+        WHERE username = $1
+        "#,
+        credentials.username,
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(PublishError::GetSubscriberError)?;
+
+    let (expected_password_hash, user_id) = match row {
+        Some(row) => (row.password_hash, row.user_id),
+        None => {
+            return Err(PublishError::AuthError("Unknown Username".to_string()));
+        }
+    };
+
+    let expected_password_hash = PasswordHash::new(&expected_password_hash)
+        .map_err(|err| PublishError::Unexpected(err.to_string()))?;
+
+    let _ = Argon2::default()
+        .verify_password(credentials.password.as_bytes(), &expected_password_hash)
+        .map_err(|_err| PublishError::AuthError("Invalid password".to_string()))?;
+
+    Ok(user_id)
+}
+
+fn basic_authentication(headers: &HeaderMap) -> Result<Credentials, String> {
+    let header_value = headers
+        .get("Authorization")
+        .ok_or("The 'Authorization' header was missing")?
+        .to_str()
+        .map_err(|_err| "The 'Authorization' header was not a valid UTF8 string.".to_string())?;
+
+    let base64encoded_segment = header_value
+        .strip_prefix("Basic ")
+        .ok_or("The authorization scheme was not 'Basic'.")?;
+    let decoded_bytes = base64::decode_config(base64encoded_segment, base64::STANDARD)
+        .map_err(|_err| "Failed to base64-decode 'Basic' credentials.".to_string())?;
+
+    let decoded_credentials = String::from_utf8(decoded_bytes)
+        .map_err(|_err| "The decoded credential string is not valid UTF8.".to_string())?;
+
+    let mut credentials = decoded_credentials.splitn(2, ":");
+
+    let username = credentials
+        .next()
+        .ok_or_else(|| "A username must be provided in 'Basic' auth.".to_string())?
+        .to_string();
+    let password = credentials
+        .next()
+        .ok_or_else(|| "A password must be provided in 'Basic' auth.".to_string())?
+        .to_string();
+
+    Ok(Credentials { username, password })
 }
 
 async fn get_confirmed_subscribers(
@@ -88,6 +172,8 @@ fn error_chain_fmt(e: &impl Error, f: &mut Formatter<'_>) -> std::fmt::Result {
 pub enum PublishError {
     GetSubscriberError(sqlx::Error),
     SendEmailError(reqwest::Error),
+    AuthError(String),
+    Unexpected(String),
 }
 
 impl std::fmt::Display for PublishError {
@@ -99,6 +185,8 @@ impl std::fmt::Display for PublishError {
             PublishError::SendEmailError(_) => {
                 write!(f, "Failed to send a confirmation email.")
             }
+            PublishError::AuthError(e) => write!(f, "{}", e),
+            PublishError::Unexpected(e) => write!(f, "{}", e),
         }
     }
 }
@@ -108,6 +196,8 @@ impl Error for PublishError {
         match self {
             PublishError::GetSubscriberError(e) => Some(e),
             PublishError::SendEmailError(e) => Some(e),
+            PublishError::AuthError(_) => None,
+            PublishError::Unexpected(_) => None,
         }
     }
 }
@@ -129,11 +219,25 @@ impl From<reqwest::Error> for PublishError {
     }
 }
 
+impl From<String> for PublishError {
+    fn from(e: String) -> Self {
+        Self::AuthError(e)
+    }
+}
+
 impl ResponseError for PublishError {
-    fn status_code(&self) -> StatusCode {
+    fn error_response(&self) -> HttpResponse {
         match self {
-            PublishError::GetSubscriberError(_) | PublishError::SendEmailError(_) => {
-                StatusCode::INTERNAL_SERVER_ERROR
+            PublishError::GetSubscriberError(_)
+            | PublishError::SendEmailError(_)
+            | PublishError::Unexpected(_) => HttpResponse::new(StatusCode::INTERNAL_SERVER_ERROR),
+            PublishError::AuthError(_) => {
+                let mut response = HttpResponse::new(StatusCode::UNAUTHORIZED);
+                let header_value = HeaderValue::from_str(r#"Basic realm="publish""#).unwrap();
+                response
+                    .headers_mut()
+                    .insert(header::WWW_AUTHENTICATE, header_value);
+                response
             }
         }
     }
